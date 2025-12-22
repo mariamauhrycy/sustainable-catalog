@@ -1,7 +1,6 @@
 const http = require("http");
 
 const port = process.env.PORT || 4000;
-let importedProducts = [];
 
 const sampleProducts = [
   {
