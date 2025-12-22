@@ -1,6 +1,7 @@
 const http = require("http");
 
 const port = process.env.PORT || 4000;
+let importedProducts = [];
 
 const sampleProducts = [
   {
@@ -117,7 +118,8 @@ const server = http.createServer(async (req, res) => {
     const minPrice = minPriceRaw ? Number(minPriceRaw) : null;
     const maxPrice = maxPriceRaw ? Number(maxPriceRaw) : null;
 
-    let filtered = sampleProducts.slice();
+    const source = importedProducts.length ? importedProducts : sampleProducts;
+let filtered = source.slice();
 
     if (q) {
       filtered = filtered.filter(
@@ -150,6 +152,7 @@ const server = http.createServer(async (req, res) => {
         p => typeof p.price === "number" && p.price <= maxPrice
       );
     }
+importedProducts = products;
 
     return sendJson(res, 200, {
       updatedAt: new Date().toISOString(),
