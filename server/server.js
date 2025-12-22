@@ -152,7 +152,6 @@ let filtered = source.slice();
         p => typeof p.price === "number" && p.price <= maxPrice
       );
     }
-importedProducts = products;
 
     return sendJson(res, 200, {
       updatedAt: new Date().toISOString(),
@@ -218,7 +217,7 @@ importedProducts = products;
 const items = pickItems(data);
 
 
-      const products = items
+            const products = items
         .map((it, idx) => {
           const title = it?.title ? String(it.title) : null;
           const link = it?.link ? String(it.link) : null;
@@ -251,13 +250,13 @@ const items = pickItems(data);
             currency: currency || null,
             brand: brand || null,
             tags: detectSustainabilityTags(`${title} ${brand || ""}`),
-
             url: link,
             image
           };
         })
         .filter(Boolean);
-        importedProducts = products;
+
+      importedProducts = products;
 
       return sendJson(res, 200, {
         feedUrl,
