@@ -41,7 +41,62 @@ function sendText(res, statusCode, text) {
     "Access-Control-Allow-Origin": "*"
   });
   res.end(text);
+} function detectSustainabilityTags(text) {
+  const t = String(text || "").toLowerCase();
+
+  const tags = new Set();
+
+  // Recycled
+  if (
+    t.includes("recycled") ||
+    t.includes("recyclate") ||
+    t.includes("post-consumer") ||
+    t.includes("post consumer") ||
+    t.includes("rpet") ||
+    t.includes("reclaimed material")
+  ) {
+    tags.add("Recycled");
+  }
+
+  // Upcycled
+  if (
+    t.includes("upcycled") ||
+    t.includes("upcycle") ||
+    t.includes("repurposed") ||
+    t.includes("reworked")
+  ) {
+    tags.add("Upcycled");
+  }
+
+  // Handmade
+  if (
+    t.includes("handmade") ||
+    t.includes("hand made") ||
+    t.includes("hand-stitched") ||
+    t.includes("hand stitched") ||
+    t.includes("handcrafted") ||
+    t.includes("artisan") ||
+    t.includes("made by hand")
+  ) {
+    tags.add("Handmade");
+  }
+
+  // Organic
+  if (
+    t.includes("organic") ||
+    t.includes("bio cotton") ||
+    t.includes("organic cotton") ||
+    t.includes("gots") ||
+    t.includes("oekotex") ||
+    t.includes("oeko-tex") ||
+    t.includes("oeko tex")
+  ) {
+    tags.add("Organic");
+  }
+
+  return Array.from(tags);
 }
+
 
 const server = http.createServer(async (req, res) => {
   const url = req.url || "/";
@@ -192,7 +247,8 @@ const items = pickItems(data);
             price: typeof price === "number" && !Number.isNaN(price) ? price : null,
             currency: currency || null,
             brand: brand || null,
-            tags: [],
+            tags: detectSustainabilityTags(`${title} ${brand || ""}`),
+
             url: link,
             image
           };
