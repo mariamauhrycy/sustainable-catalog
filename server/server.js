@@ -141,9 +141,24 @@ const server = http.createServer(async (req, res) => {
 
       const data = parser.parse(xml);
 
-      const channel = data?.rss?.channel;
-      const itemsRaw = channel?.item || [];
-      const items = Array.isArray(itemsRaw) ? itemsRaw : [itemsRaw];
+      const pickItems = (obj) => {
+  const rssItems = obj?.rss?.channel?.item;
+  if (rssItems) return Array.isArray(rssItems) ? rssItems : [rssItems];
+
+  const atomEntries = obj?.feed?.entry;
+  if (atomEntries) return Array.isArray(atomEntries) ? atomEntries : [atomEntries];
+
+  const productsA = obj?.products?.product;
+  if (productsA) return Array.isArray(productsA) ? productsA : [productsA];
+
+  const productsB = obj?.productfeed?.product;
+  if (productsB) return Array.isArray(productsB) ? productsB : [productsB];
+
+  return [];
+};
+
+const items = pickItems(data);
+
 
       const products = items
         .map((it, idx) => {
