@@ -25,6 +25,7 @@ const sampleProducts = [
     image: "https://via.placeholder.com/600x600.png?text=Recycled+Bottle"
   }
 ];
+let importedProducts = [];
 
 function sendJson(res, statusCode, data) {
   const body = JSON.stringify(data);
@@ -257,6 +258,7 @@ const items = pickItems(data);
           };
         })
         .filter(Boolean);
+        importedProducts = products;
 
       return sendJson(res, 200, {
         feedUrl,
