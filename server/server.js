@@ -43,7 +43,7 @@ function sendText(res, statusCode, text) {
   res.end(text);
 }
 
-const server = http.createServer((req, res) => {
+const server = http.createServer(async (req, res) => {
   const url = req.url || "/";
 
   if (url === "/" || url === "/health") {
@@ -110,7 +110,8 @@ const server = http.createServer((req, res) => {
     });
   }
 
-  if (url.startsWith("/import/google")) {
+    if (url.startsWith("/import/google")) {
+    const { XMLParser } = require("fast-xml-parser");
     const fullUrl = new URL(url, `http://localhost:${port}`);
     const feedUrl = fullUrl.searchParams.get("url");
 
@@ -121,11 +122,81 @@ const server = http.createServer((req, res) => {
       });
     }
 
-    return sendJson(res, 200, {
-      note: "Importer scaffold is ready. Next step is parsing the XML feed into products.",
-      feedUrl
-    });
+    try {
+      const r = await fetch(feedUrl);
+      if (!r.ok) {
+        return sendJson(res, 502, {
+          error: "Failed to fetch feed",
+          status: r.status,
+          statusText: r.statusText
+        });
+      }
+
+      const xml = await r.text();
+
+      const parser = new XMLParser({
+        ignoreAttributes: false,
+        attributeNamePrefix: "@_"
+      });
+
+      const data = parser.parse(xml);
+
+      const channel = data?.rss?.channel;
+      const itemsRaw = channel?.item || [];
+      const items = Array.isArray(itemsRaw) ? itemsRaw : [itemsRaw];
+
+      const products = items
+        .map((it, idx) => {
+          const title = it?.title ? String(it.title) : null;
+          const link = it?.link ? String(it.link) : null;
+
+          const gId = it?.["g:id"] ? String(it["g:id"]) : null;
+          const brand = it?.["g:brand"] ? String(it["g:brand"]) : null;
+
+          const image =
+            it?.["g:image_link"] ? String(it["g:image_link"]) :
+            it?.["g:additional_image_link"] ? String(it["g:additional_image_link"]) :
+            null;
+
+          const priceStr = it?.["g:price"] ? String(it["g:price"]) : null;
+          let price = null;
+          let currency = null;
+          if (priceStr) {
+            const m = priceStr.match(/^\s*([0-9]+(?:\.[0-9]+)?)\s*([A-Za-z]{3})\s*$/);
+            if (m) {
+              price = Number(m[1]);
+              currency = m[2].toUpperCase();
+            }
+          }
+
+          if (!title || !link) return null;
+
+          return {
+            id: gId || `feed-${idx}`,
+            title,
+            price: typeof price === "number" && !Number.isNaN(price) ? price : null,
+            currency: currency || null,
+            brand: brand || null,
+            tags: [],
+            url: link,
+            image
+          };
+        })
+        .filter(Boolean);
+
+      return sendJson(res, 200, {
+        feedUrl,
+        count: products.length,
+        products
+      });
+    } catch (e) {
+      return sendJson(res, 500, {
+        error: "Importer crashed",
+        message: String(e?.message || e)
+      });
+    }
   }
+
 
 
 
