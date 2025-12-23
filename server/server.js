@@ -1,13 +1,15 @@
 const http = require("http");
+const { Pool } = require("pg");
 
 const port = process.env.PORT || 4000;
-
-const { Pool } = require("pg");
 
 const pool = process.env.DATABASE_URL
   ? new Pool({
       connectionString: process.env.DATABASE_URL,
-      ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : false
+      ssl:
+        process.env.NODE_ENV === "production"
+          ? { rejectUnauthorized: false }
+          : false
     })
   : null;
 
@@ -38,8 +40,6 @@ async function initDb() {
   `);
 }
 
-
-
 const sampleProducts = [
   {
     id: "p1",
@@ -62,7 +62,6 @@ const sampleProducts = [
     image: "https://via.placeholder.com/600x600.png?text=Recycled+Bottle"
   }
 ];
-let importedProducts = [];
 
 function sendJson(res, statusCode, data) {
   const body = JSON.stringify(data);
@@ -80,10 +79,11 @@ function sendText(res, statusCode, text) {
     "Access-Control-Allow-Origin": "*"
   });
   res.end(text);
-} function detectSustainabilityTags(text) {
+}
+
+function detectSustainabilityTags(text) {
   const t = String(text || "").toLowerCase();
   const tags = new Set();
-
   const has = (...phrases) => phrases.some((p) => t.includes(p));
 
   if (
@@ -108,7 +108,8 @@ function sendText(res, statusCode, text) {
       "recycled steel",
       "recycled rubber"
     )
-  ) tags.add("Recycled");
+  )
+    tags.add("Recycled");
 
   if (
     has(
@@ -127,7 +128,8 @@ function sendText(res, statusCode, text) {
       "leftover fabric",
       "surplus fabric"
     )
-  ) tags.add("Upcycled");
+  )
+    tags.add("Upcycled");
 
   if (
     has(
@@ -147,7 +149,8 @@ function sendText(res, statusCode, text) {
       "one of a kind",
       "one-of-a-kind"
     )
-  ) tags.add("Handmade");
+  )
+    tags.add("Handmade");
 
   if (
     has(
@@ -161,7 +164,15 @@ function sendText(res, statusCode, text) {
       "ecocert"
     )
   ) {
-    if (!has("organic traffic", "organic reach", "organic growth", "organic shapes", "organic shape")) {
+    if (
+      !has(
+        "organic traffic",
+        "organic reach",
+        "organic growth",
+        "organic shapes",
+        "organic shape"
+      )
+    ) {
       tags.add("Organic");
     }
   }
@@ -169,9 +180,21 @@ function sendText(res, statusCode, text) {
   return Array.from(tags);
 }
 
+function pickItems(obj) {
+  const rssItems = obj?.rss?.channel?.item;
+  if (rssItems) return Array.isArray(rssItems) ? rssItems : [rssItems];
 
+  const atomEntries = obj?.feed?.entry;
+  if (atomEntries) return Array.isArray(atomEntries) ? atomEntries : [atomEntries];
 
+  const productsA = obj?.products?.product;
+  if (productsA) return Array.isArray(productsA) ? productsA : [productsA];
 
+  const productsB = obj?.productfeed?.product;
+  if (productsB) return Array.isArray(productsB) ? productsB : [productsB];
+
+  return [];
+}
 
 const server = http.createServer(async (req, res) => {
   const url = req.url || "/";
@@ -180,90 +203,89 @@ const server = http.createServer(async (req, res) => {
     return sendText(res, 200, "Backend is running\n");
   }
 
-   if (url.startsWith("/products")) {
+  if (url.startsWith("/products")) {
     const fullUrl = new URL(url, `http://localhost:${port}`);
     const q = (fullUrl.searchParams.get("q") || "").toLowerCase().trim();
     const brand = (fullUrl.searchParams.get("brand") || "").toLowerCase().trim();
-
     const tag = (fullUrl.searchParams.get("tag") || "").trim();
+
     const minPriceRaw = fullUrl.searchParams.get("minPrice");
     const maxPriceRaw = fullUrl.searchParams.get("maxPrice");
-
     const minPrice = minPriceRaw ? Number(minPriceRaw) : null;
     const maxPrice = maxPriceRaw ? Number(maxPriceRaw) : null;
 
     let products = [];
 
-if (pool) {
-  const conditions = [];
-  const params = [];
-  let i = 1;
+    if (pool) {
+      const conditions = [];
+      const params = [];
+      let i = 1;
 
-  if (q) {
-    conditions.push(`(LOWER(title) LIKE $${i} OR LOWER(COALESCE(brand,'')) LIKE $${i})`);
-    params.push(`%${q}%`);
-    i++;
+      if (q) {
+        conditions.push(
+          `(LOWER(title) LIKE $${i} OR LOWER(COALESCE(brand,'')) LIKE $${i})`
+        );
+        params.push(`%${q}%`);
+        i++;
+      }
+
+      if (brand) {
+        conditions.push(`LOWER(COALESCE(brand,'')) LIKE $${i}`);
+        params.push(`%${brand}%`);
+        i++;
+      }
+
+      if (tag) {
+        conditions.push(`$${i} = ANY(tags)`);
+        params.push(tag);
+        i++;
+      }
+
+      if (minPrice !== null && !Number.isNaN(minPrice)) {
+        conditions.push(`price >= $${i}`);
+        params.push(minPrice);
+        i++;
+      }
+
+      if (maxPrice !== null && !Number.isNaN(maxPrice)) {
+        conditions.push(`price <= $${i}`);
+        params.push(maxPrice);
+        i++;
+      }
+
+      const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+      const sql = `
+        SELECT id, title, price, currency, brand, tags, url, image
+        FROM products
+        ${where}
+        ORDER BY imported_at DESC
+        LIMIT 200
+      `;
+
+      const r = await pool.query(sql, params);
+      products = r.rows.map((row) => ({
+        ...row,
+        price: row.price === null ? null : Number(row.price)
+      }));
+    } else {
+      products = sampleProducts;
+    }
+
+    return sendJson(res, 200, {
+      updatedAt: new Date().toISOString(),
+      count: products.length,
+      filters: {
+        q: q || null,
+        brand: brand || null,
+        tag: tag || null,
+        minPrice: minPriceRaw || null,
+        maxPrice: maxPriceRaw || null
+      },
+      products
+    });
   }
 
-  if (brand) {
-    conditions.push(`LOWER(COALESCE(brand,'')) LIKE $${i}`);
-    params.push(`%${brand}%`);
-    i++;
-  }
-
-  if (tag) {
-    conditions.push(`$${i} = ANY(tags)`);
-    params.push(tag);
-    i++;
-  }
-
-  if (minPrice !== null && !Number.isNaN(minPrice)) {
-    conditions.push(`price >= $${i}`);
-    params.push(minPrice);
-    i++;
-  }
-
-  if (maxPrice !== null && !Number.isNaN(maxPrice)) {
-    conditions.push(`price <= $${i}`);
-    params.push(maxPrice);
-    i++;
-  }
-
-  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
-
-  const sql = `
-    SELECT id, title, price, currency, brand, tags, url, image
-    FROM products
-    ${where}
-    ORDER BY imported_at DESC
-    LIMIT 200
-  `;
-
-  const r = await pool.query(sql, params);
-
-  products = r.rows.map((row) => ({
-    ...row,
-    price: row.price === null ? null : Number(row.price)
-  }));
-} else {
-  products = sampleProducts;
-}
-
-return sendJson(res, 200, {
-  updatedAt: new Date().toISOString(),
-  count: products.length,
-  filters: {
-    q: q || null,
-    brand: brand || null,
-    tag: tag || null,
-    minPrice: minPriceRaw || null,
-    maxPrice: maxPriceRaw || null
-  },
-  products
-});
-}
-
-    if (url.startsWith("/import/google")) {
+  if (url.startsWith("/import/google")) {
     const { XMLParser } = require("fast-xml-parser");
     const fullUrl = new URL(url, `http://localhost:${port}`);
     const feedUrl = fullUrl.searchParams.get("url");
@@ -276,7 +298,14 @@ return sendJson(res, 200, {
     }
 
     try {
-      const r = await fetch(feedUrl);
+      const r = await fetch(feedUrl, {
+        redirect: "follow",
+        headers: {
+          "User-Agent": "Mozilla/5.0",
+          Accept: "application/xml,text/xml,*/*"
+        }
+      });
+
       if (!r.ok) {
         return sendJson(res, 502, {
           error: "Failed to fetch feed",
@@ -293,27 +322,9 @@ return sendJson(res, 200, {
       });
 
       const data = parser.parse(xml);
+      const items = pickItems(data);
 
-      const pickItems = (obj) => {
-  const rssItems = obj?.rss?.channel?.item;
-  if (rssItems) return Array.isArray(rssItems) ? rssItems : [rssItems];
-
-  const atomEntries = obj?.feed?.entry;
-  if (atomEntries) return Array.isArray(atomEntries) ? atomEntries : [atomEntries];
-
-  const productsA = obj?.products?.product;
-  if (productsA) return Array.isArray(productsA) ? productsA : [productsA];
-
-  const productsB = obj?.productfeed?.product;
-  if (productsB) return Array.isArray(productsB) ? productsB : [productsB];
-
-  return [];
-};
-
-const items = pickItems(data);
-
-
-            const products = items
+      const products = items
         .map((it, idx) => {
           const title = it?.title ? String(it.title) : null;
           const link = it?.link ? String(it.link) : null;
@@ -351,8 +362,14 @@ const items = pickItems(data);
           };
         })
         .filter(Boolean);
-              if (pool) {
-        const q = `
+
+      if (pool) {
+        await pool.query(
+          `INSERT INTO feeds (url) VALUES ($1) ON CONFLICT (url) DO NOTHING`,
+          [feedUrl]
+        );
+
+        const upsert = `
           INSERT INTO products (id, title, price, currency, brand, tags, url, image, source_feed)
           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
           ON CONFLICT (id) DO UPDATE SET
@@ -368,7 +385,7 @@ const items = pickItems(data);
         `;
 
         for (const p of products) {
-          await pool.query(q, [
+          await pool.query(upsert, [
             p.id,
             p.title,
             p.price,
@@ -381,9 +398,6 @@ const items = pickItems(data);
           ]);
         }
       }
-
-
-      importedProducts = products;
 
       return sendJson(res, 200, {
         feedUrl,
@@ -398,8 +412,19 @@ const items = pickItems(data);
     }
   }
 
+  if (url === "/import/all") {
+    if (!pool) {
+      return sendJson(res, 400, { error: "Database not available" });
+    }
 
+    const r = await pool.query(`SELECT url FROM feeds ORDER BY created_at DESC`);
+    const feeds = r.rows.map((x) => x.url);
 
+    return sendJson(res, 200, {
+      count: feeds.length,
+      feeds
+    });
+  }
 
   return sendJson(res, 404, { error: "Not found", path: url });
 });
