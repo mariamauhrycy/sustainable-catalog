@@ -2,6 +2,44 @@ const http = require("http");
 
 const port = process.env.PORT || 4000;
 
+const { Pool } = require("pg");
+
+const pool = process.env.DATABASE_URL
+  ? new Pool({
+      connectionString: process.env.DATABASE_URL,
+      ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : false
+    })
+  : null;
+
+async function initDb() {
+  if (!pool) return;
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS products (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      price NUMERIC NULL,
+      currency TEXT NULL,
+      brand TEXT NULL,
+      tags TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+      url TEXT NOT NULL,
+      image TEXT NULL,
+      source_feed TEXT NULL,
+      imported_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS feeds (
+      id SERIAL PRIMARY KEY,
+      url TEXT UNIQUE NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+}
+
+
+
 const sampleProducts = [
   {
     id: "p1",
@@ -44,59 +82,95 @@ function sendText(res, statusCode, text) {
   res.end(text);
 } function detectSustainabilityTags(text) {
   const t = String(text || "").toLowerCase();
-
   const tags = new Set();
 
-  // Recycled
-  if (
-    t.includes("recycled") ||
-    t.includes("recyclate") ||
-    t.includes("post-consumer") ||
-    t.includes("post consumer") ||
-    t.includes("rpet") ||
-    t.includes("reclaimed material")
-  ) {
-    tags.add("Recycled");
-  }
+  const has = (...phrases) => phrases.some((p) => t.includes(p));
 
-  // Upcycled
   if (
-    t.includes("upcycled") ||
-    t.includes("upcycle") ||
-    t.includes("repurposed") ||
-    t.includes("reworked")
-  ) {
-    tags.add("Upcycled");
-  }
+    has(
+      "recycled",
+      "post-consumer",
+      "post consumer",
+      "pre-consumer",
+      "pre consumer",
+      "rpet",
+      "reclaimed plastic",
+      "recycled plastic",
+      "recycled polyester",
+      "recycled cotton",
+      "recycled nylon",
+      "recycled aluminum",
+      "recycled aluminium",
+      "recycled glass",
+      "recycled paper",
+      "recycled cardboard",
+      "ocean plastic",
+      "recycled steel",
+      "recycled rubber"
+    )
+  ) tags.add("Recycled");
 
-  // Handmade
   if (
-    t.includes("handmade") ||
-    t.includes("hand made") ||
-    t.includes("hand-stitched") ||
-    t.includes("hand stitched") ||
-    t.includes("handcrafted") ||
-    t.includes("artisan") ||
-    t.includes("made by hand")
-  ) {
-    tags.add("Handmade");
-  }
+    has(
+      "upcycled",
+      "upcycle",
+      "repurposed",
+      "reworked",
+      "re-made",
+      "remade",
+      "reclaimed fabric",
+      "reclaimed textile",
+      "made from scraps",
+      "made from offcuts",
+      "made from off-cuts",
+      "deadstock",
+      "leftover fabric",
+      "surplus fabric"
+    )
+  ) tags.add("Upcycled");
 
-  // Organic
   if (
-    t.includes("organic") ||
-    t.includes("bio cotton") ||
-    t.includes("organic cotton") ||
-    t.includes("gots") ||
-    t.includes("oekotex") ||
-    t.includes("oeko-tex") ||
-    t.includes("oeko tex")
+    has(
+      "handmade",
+      "hand made",
+      "hand-stitched",
+      "hand stitched",
+      "handcrafted",
+      "artisan",
+      "made by hand",
+      "hand-poured",
+      "hand poured",
+      "small batch",
+      "small-batch",
+      "made to order",
+      "made-to-order",
+      "one of a kind",
+      "one-of-a-kind"
+    )
+  ) tags.add("Handmade");
+
+  if (
+    has(
+      "organic",
+      "organic cotton",
+      "organic linen",
+      "gots",
+      "cosmos organic",
+      "soil association organic",
+      "usda organic",
+      "ecocert"
+    )
   ) {
-    tags.add("Organic");
+    if (!has("organic traffic", "organic reach", "organic growth", "organic shapes", "organic shape")) {
+      tags.add("Organic");
+    }
   }
 
   return Array.from(tags);
 }
+
+
+
 
 
 const server = http.createServer(async (req, res) => {
@@ -118,54 +192,76 @@ const server = http.createServer(async (req, res) => {
     const minPrice = minPriceRaw ? Number(minPriceRaw) : null;
     const maxPrice = maxPriceRaw ? Number(maxPriceRaw) : null;
 
-    const source = importedProducts.length ? importedProducts : sampleProducts;
-let filtered = source.slice();
+    let products = [];
 
-    if (q) {
-      filtered = filtered.filter(
-        p =>
-          (p.title || "").toLowerCase().includes(q) ||
-          (p.brand || "").toLowerCase().includes(q)
-      );
-    }
+if (pool) {
+  const conditions = [];
+  const params = [];
+  let i = 1;
 
-    if (brand) {
-      filtered = filtered.filter(p =>
-        (p.brand || "").toLowerCase().includes(brand)
-      );
-    }
-
-    if (tag) {
-      filtered = filtered.filter(
-        p => Array.isArray(p.tags) && p.tags.includes(tag)
-      );
-    }
-
-    if (minPrice !== null && !Number.isNaN(minPrice)) {
-      filtered = filtered.filter(
-        p => typeof p.price === "number" && p.price >= minPrice
-      );
-    }
-
-    if (maxPrice !== null && !Number.isNaN(maxPrice)) {
-      filtered = filtered.filter(
-        p => typeof p.price === "number" && p.price <= maxPrice
-      );
-    }
-
-    return sendJson(res, 200, {
-      updatedAt: new Date().toISOString(),
-      count: filtered.length,
-      filters: {
-        q: q || null,
-        brand: brand || null,
-        tag: tag || null,
-        minPrice: minPriceRaw || null,
-        maxPrice: maxPriceRaw || null
-      },
-      products: filtered
-    });
+  if (q) {
+    conditions.push(`(LOWER(title) LIKE $${i} OR LOWER(COALESCE(brand,'')) LIKE $${i})`);
+    params.push(`%${q}%`);
+    i++;
   }
+
+  if (brand) {
+    conditions.push(`LOWER(COALESCE(brand,'')) LIKE $${i}`);
+    params.push(`%${brand}%`);
+    i++;
+  }
+
+  if (tag) {
+    conditions.push(`$${i} = ANY(tags)`);
+    params.push(tag);
+    i++;
+  }
+
+  if (minPrice !== null && !Number.isNaN(minPrice)) {
+    conditions.push(`price >= $${i}`);
+    params.push(minPrice);
+    i++;
+  }
+
+  if (maxPrice !== null && !Number.isNaN(maxPrice)) {
+    conditions.push(`price <= $${i}`);
+    params.push(maxPrice);
+    i++;
+  }
+
+  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+
+  const sql = `
+    SELECT id, title, price, currency, brand, tags, url, image
+    FROM products
+    ${where}
+    ORDER BY imported_at DESC
+    LIMIT 200
+  `;
+
+  const r = await pool.query(sql, params);
+
+  products = r.rows.map((row) => ({
+    ...row,
+    price: row.price === null ? null : Number(row.price)
+  }));
+} else {
+  products = sampleProducts;
+}
+
+return sendJson(res, 200, {
+  updatedAt: new Date().toISOString(),
+  count: products.length,
+  filters: {
+    q: q || null,
+    brand: brand || null,
+    tag: tag || null,
+    minPrice: minPriceRaw || null,
+    maxPrice: maxPriceRaw || null
+  },
+  products
+});
+}
 
     if (url.startsWith("/import/google")) {
     const { XMLParser } = require("fast-xml-parser");
@@ -255,6 +351,37 @@ const items = pickItems(data);
           };
         })
         .filter(Boolean);
+              if (pool) {
+        const q = `
+          INSERT INTO products (id, title, price, currency, brand, tags, url, image, source_feed)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+          ON CONFLICT (id) DO UPDATE SET
+            title = EXCLUDED.title,
+            price = EXCLUDED.price,
+            currency = EXCLUDED.currency,
+            brand = EXCLUDED.brand,
+            tags = EXCLUDED.tags,
+            url = EXCLUDED.url,
+            image = EXCLUDED.image,
+            source_feed = EXCLUDED.source_feed,
+            imported_at = NOW()
+        `;
+
+        for (const p of products) {
+          await pool.query(q, [
+            p.id,
+            p.title,
+            p.price,
+            p.currency,
+            p.brand,
+            p.tags || [],
+            p.url,
+            p.image,
+            feedUrl
+          ]);
+        }
+      }
+
 
       importedProducts = products;
 
@@ -276,6 +403,10 @@ const items = pickItems(data);
 
   return sendJson(res, 404, { error: "Not found", path: url });
 });
+
+initDb()
+  .then(() => console.log("DB ready"))
+  .catch((e) => console.error("DB init failed", e));
 
 server.listen(port, () => {
   console.log(`Listening on ${port}`);
